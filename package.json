@@ -1,0 +1,35 @@
+{
+  "name": "piku-assistant",
+  "version": "0.2.0",
+  "description": "Piku — 你的日常任务助手",
+  "main": "src/main.cjs",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.cjs",
+    "test:desktop": "node test/desktop.cjs",
+    "pack": "electron-builder --mac dir",
+    "dist": "electron-builder --mac dmg"
+  },
+  "build": {
+    "appId": "local.piku.assistant",
+    "productName": "Piku",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "identity": "-",
+      "target": "dmg"
+    }
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3"
+  }
+}

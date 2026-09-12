@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'">
+  <title>Piku · 日常助手</title><link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="drag-space"></div>
+    <div class="brand"><span class="brand-icon">p<span>·</span></span><strong>piku<span>日常，自有安排</span></strong></div>
+    <button class="quick-add primary" data-command="add"><span>＋</span> 记下一件事 <kbd>⌘ N</kbd></button>
+    <div class="nav-label">我的空间</div>
+    <nav>
+      <button class="nav active" data-page="today"><span>◉</span> 今日概览</button>
+      <button class="nav" data-page="tasks"><span>☷</span> 全部待办 <b id="nav-count">0</b></button>
+      <button class="nav" data-page="actions"><span>✧</span> 授权中心 <b id="action-count">0</b></button>
+      <button class="nav" data-page="history"><span>◷</span> 活动记录</button>
+    </nav>
+    <div class="sidebar-bottom"><div class="companion"><div class="orb">✳</div><strong>给大脑，留一点空白。</strong><p>琐事交给 Piku，<br>专注留给重要的事。</p></div><button class="nav" data-page="settings"><span>⚙</span> 助手设置 <i id="account-dot"></i></button><div class="local-status"><i></i> 本地保存 · 由你掌控</div></div>
+  </aside>
+  <main>
+    <header class="topbar"><span id="breadcrumb">我的空间 <b>/</b> 今日概览</span><div><span id="connection">尚未登录 ChatGPT</span><span class="avatar">我</span></div></header>
+    <div id="content"></div>
+  </main>
+  <dialog id="modal"><div id="modal-body"></div></dialog>
+  <div id="toast" role="status"></div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,96 @@
+const { _electron: electron, expect } = require('@playwright/test');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { Store } = require('../src/core.cjs');
+(async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'piku-ui-'));
+  const env = { ...process.env, PIKU_TEST_USER_DATA: directory };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const store = new Store(directory);
+  const task = store.add({ title: '整理下周项目汇报', notes: '汇总本周进度与下一步计划', priority: 'high', category: 'work' });
+  store.add({ title: '下班后取快递', priority: 'medium', category: 'life' });
+  store.add({ title: '读完正在看的那本书', priority: 'low', category: 'growth' });
+  let instance;
+  try {
+    instance = await electron.launch({ args: ['.'], cwd: path.join(__dirname, '..'), env });
+    const window = await instance.firstWindow(); const errors = [];
+    window.on('pageerror', error => errors.push(error.message));
+    await expect(window.locator('h1')).toContainText('把琐事放在这里');
+    await window.getByRole('button', { name: /记下一件事/ }).click();
+    await window.locator('#title').fill('测试：预约理发');
+    await window.getByRole('button', { name: '添加待办', exact: true }).click();
+    await expect(window.getByRole('button', { name: '测试：预约理发', exact: true })).toBeVisible();
+    await window.getByRole('button', { name: '完成 测试：预约理发', exact: true }).click();
+    await expect(window.getByRole('button', { name: '测试：预约理发', exact: true })).toHaveCount(0);
+    await window.locator('[data-page="settings"]').click();
+    await expect(window.getByRole('button', { name: '使用 ChatGPT 登录 ↗' })).toBeVisible();
+    await expect(window.locator('input[type="password"]')).toHaveCount(0);
+    await window.getByRole('button', { name: '刷新连接' }).click();
+    await instance.evaluate(({ shell }, taskId) => {
+      const { CodexClient } = process.getBuiltinModule('module').createRequire(process.cwd() + '/package.json')('./src/codex.cjs');
+      let account = null;
+      shell.openExternal = async url => { global.__loginUrl = url; };
+      global.__finishLogin = () => { account = { type: 'chatgpt', email: 'test@example.com', planType: 'plus' }; global.__client.emit('notification', 'account/login/completed', { loginId: 'ui-login', success: true }); };
+      CodexClient.prototype.request = async function(method, params) {
+        global.__client = this;
+        if (method === 'account/read') return { account };
+        if (method === 'model/list') return { data: [{ model: 'test-model', displayName: 'Test model', isDefault: true }] };
+        if (method === 'account/login/start') return { loginId: 'ui-login', authUrl: 'https://auth.openai.com/authorize?state=test' };
+        if (method === 'account/logout') { account = null; return {}; }
+        if (method === 'thread/start') return { thread: { id: 'test-thread' } };
+        if (method === 'turn/start') {
+          const result = params.outputSchema.properties.summary
+            ? { summary: '先完成项目汇报，再把生活中的小事逐一安排好。', focus: [{ taskId, reason: '提前准备更从容', nextStep: '先列出本周完成的三个重点', priority: 'high' }], actions: [{ taskId, kind: 'draft', title: '为项目汇报准备一份提纲', reason: '先把结构搭好，你可以在此基础上补充具体进度。', content: '本周进度：已完成事项、进行中的事项。下周计划：重点工作。', url: null, reminderAt: null }] }
+            : { tasks: [{ title: '测试：购买洗衣液', notes: '粘贴消息提取', dueAt: null, reminderAt: null, priority: 'low', category: 'life' }] };
+          setTimeout(() => this.emit('notification', 'turn/completed', { threadId: 'test-thread', turn: { id: 'test-turn', status: 'completed', items: [{ type: 'agentMessage', text: JSON.stringify(result) }] } }), 10);
+          return { turn: { id: 'test-turn' } };
+        }
+        return {};
+      };
+    }, task.id);
+    await window.getByRole('button', { name: '使用 ChatGPT 登录 ↗' }).click();
+    await expect(window.getByRole('button', { name: '取消登录' })).toBeVisible();
+    await window.getByRole('button', { name: '取消登录' }).click();
+    await expect(window.getByRole('button', { name: '使用 ChatGPT 登录 ↗' })).toBeVisible();
+    await window.getByRole('button', { name: '使用 ChatGPT 登录 ↗' }).click();
+    await instance.evaluate(() => global.__finishLogin());
+    await expect(window.locator('.account-box')).toContainText('test@example.com');
+    await expect(window.locator('#model option')).toHaveCount(2);
+    await window.locator('[data-page="today"]').click();
+    await window.getByRole('button', { name: /分析我的待办/ }).click();
+    await expect(window.getByRole('heading', { name: '为项目汇报准备一份提纲' })).toBeVisible();
+    fs.mkdirSync(path.join(__dirname, '../test-output'), { recursive: true });
+    await window.screenshot({ path: path.join(__dirname, '../test-output/desktop.png') });
+    await window.getByRole('button', { name: '查看并授权 →' }).click();
+    await expect(window.locator('.draft-preview')).toContainText('本周进度');
+    await window.getByRole('button', { name: '授权并执行' }).click();
+    await expect(window.getByRole('button', { name: '在 Finder 中查看文稿' })).toBeVisible();
+    const files = fs.readdirSync(path.join(directory, 'drafts'));
+    if (files.length !== 1) throw new Error('Draft was not created exactly once');
+    await window.getByRole('button', { name: '关闭', exact: true }).click();
+    await window.getByRole('button', { name: '粘贴消息 ↗' }).click();
+    await window.locator('textarea').fill('记得购买洗衣液');
+    await window.getByRole('button', { name: /提取待办/ }).click();
+    await expect(window.locator('#import-form')).toContainText('测试：购买洗衣液');
+    await window.getByRole('button', { name: '加入清单' }).click();
+    await expect(window.getByRole('button', { name: '测试：购买洗衣液', exact: true })).toBeVisible();
+    await window.locator('[data-page="tasks"]').first().click();
+    await window.locator('#search').fill('洗衣液');
+    await expect(window.locator('.task-row')).toHaveCount(1);
+    await window.getByRole('button', { name: '测试：购买洗衣液', exact: true }).click();
+    await window.getByRole('button', { name: '删除待办', exact: true }).click();
+    await window.getByRole('button', { name: '确认删除', exact: true }).click();
+    await expect(window.locator('.task-row')).toHaveCount(0);
+    if (errors.length) throw new Error(errors.join('\n'));
+    await window.locator('[data-page="settings"]').click();
+    await window.getByRole('button', { name: '退出登录', exact: true }).click();
+    await expect(window.getByRole('button', { name: '使用 ChatGPT 登录 ↗' })).toBeVisible();
+    await window.screenshot({ path: path.join(__dirname, '../test-output/chatgpt-login.png') });
+    console.log('PASS: ChatGPT login, cancel, account/model refresh, logout, mock analysis/extract, task CRUD, approval and draft execution; no renderer errors.');
+  } finally {
+    if (instance) await instance.evaluate(({ app }) => app.quit()).catch(() => {});
+    if (instance) await instance.close().catch(() => {});
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });

@@ -1,0 +1,10 @@
+node_modules/
+release/
+.env
+.env.*
+!.env.example
+credential.bin
+auth.json
+.codex/
+.DS_Store
+test-output/
