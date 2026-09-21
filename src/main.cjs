@@ -4,16 +4,19 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { randomUUID } = require('node:crypto');
 const { CodexClient, ChatGPTService } = require('./codex.cjs');
-const { Store, extract, analyze, execute, dueReminders } = require('./core.cjs');
+const { judgeTask, JudgmentRunner } = require('./judgment.cjs');
+const { CaptureWindows } = require('./capture-windows.cjs');
+const { Store, extract, extractScreenshot, analyze, execute, dueReminders } = require('./core.cjs');
 app.setName('Piku');
 if (!app.isPackaged && process.env.PIKU_TEST_USER_DATA) app.setPath('userData', path.resolve(process.env.PIKU_TEST_USER_DATA));
-let window, tray, store, chatgpt, quitting = false, reviewing = false, reviewRetryAfter = 0;
+let judgments, aiTail = Promise.resolve();
+let window, tray, store, chatgpt, captures, quitting = false, reviewing = false, reviewRetryAfter = 0;
 const uiUrl = pathToFileURL(path.join(__dirname, 'ui/index.html')).href;
 function publicState() {
   return { ...store.state, auth: chatgpt.snapshot(), reviewing, notificationsSupported: Notification.isSupported() };
 }
-function publish() { if (window && !window.isDestroyed()) window.webContents.send('state', publicState()); }
-function aiOptions() { return { generate: request => chatgpt.generate(request), model: store.state.settings.model }; }
+function publish() { if (window && !window.isDestroyed()) window.webContents.send('state', publicState()); captures?.changed(); }
+function aiOptions() { return { generate: request => { const job = aiTail.catch(() => {}).then(() => chatgpt.generate(request)); aiTail = job; return job; }, model: store.state.settings.model }; }
 function show() { if (!window || window.isDestroyed()) createWindow(); window.show(); window.focus(); }
 function notify(title, body) {
   if (!Notification.isSupported()) return;
@@ -25,10 +28,10 @@ async function review() {
   if (!store.state.tasks.some(t => t.status === 'todo')) throw new Error('先添加一条待办吧');
   const options = aiOptions();
   reviewing = true; publish();
-  const snapshot = JSON.stringify(store.state.tasks);
+  const snapshot = JSON.stringify(store.state.tasks.map(({ judgment, ...task }) => task));
   try {
     const result = await analyze(JSON.parse(snapshot), options);
-    if (snapshot !== JSON.stringify(store.state.tasks)) throw new Error('分析期间任务发生变化，请重新分析');
+    if (snapshot !== JSON.stringify(store.state.tasks.map(({ judgment, ...task }) => task))) throw new Error('分析期间任务发生变化，请重新分析');
     store.state.analysis = { summary: result.summary, focus: result.focus, at: new Date().toISOString() };
     // Keep already reviewed proposals stable; a later analysis never silently changes their payload.
     for (const proposal of result.actions) {
@@ -47,8 +50,9 @@ function bind(channel, handler) {
   });
 }
 function createWindow() {
-  window = new BrowserWindow({ width: 1320, height: 860, minWidth: 1000, minHeight: 700, title: 'Piku · 日常助手', backgroundColor: '#f6f7f9', titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 22, y: 21 }, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  window = new BrowserWindow({ show: false, width: 620, height: 600, minWidth: 480, minHeight: 420, title: 'Piku · 日常助手', backgroundColor: '#f6f7f9', titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 22, y: 21 }, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   window.loadURL(uiUrl);
+  window.once('ready-to-show', () => window.show());
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', event => event.preventDefault());
   window.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
@@ -83,6 +87,10 @@ else {
     bind('state:get', () => publicState());
     bind('task:add', data => store.add(data));
     bind('task:update', data => store.update(data.id, data.patch));
+    bind('task:judge', id => {
+      if (!chatgpt.status.connected) throw new Error('请先登录 ChatGPT');
+      return judgments.run(id);
+    });
     bind('task:remove', id => store.remove(id));
     bind('ai:extract', text => extract(text, aiOptions()));
     bind('ai:review', review);
@@ -111,14 +119,17 @@ else {
     });
     bind('notification:test', () => notify('Piku 已准备好', '任务到期时，我会在这里提醒你。'));
     createWindow();
+    captures = new CaptureWindows({ store, getMainWindow: () => window, showMain: show, isLoggedIn: () => chatgpt.status.connected, recognize: (file, signal) => extractScreenshot(file, { ...aiOptions(), signal }), publish, onLogin: () => window.webContents.send('navigate', 'settings') });
+    captures.showFloating();
+    judgments = new JudgmentRunner({ store, generate: task => judgeTask(task, aiOptions()), canRun: () => chatgpt.status.connected && !chatgpt.busy && !reviewing && !captures.capturing && captures.session.current?.status !== 'recognizing', onChange: publish });
     chatgpt.refresh().catch(() => {});
     const icon = nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVQ4T2NkYGD4z0ABYBw1YNSAUQOGAwAAT/8BHeUqC8wAAAAASUVORK5CYII=');
     icon.setTemplateImage(true); tray = new Tray(icon); tray.setTitle('◒'); tray.setToolTip('Piku · 日常助手');
-    tray.setContextMenu(Menu.buildFromTemplate([{ label: '打开 Piku', click: show }, { label: '立即分析待办', click: () => review().catch(e => { show(); window.webContents.send('notice', e.message); }) }, { type: 'separator' }, { label: '退出 Piku', click: () => app.quit() }]));
+    tray.setContextMenu(Menu.buildFromTemplate([{ label: '截图记事', click: () => captures.start() }, { label: '显示悬浮图标', click: () => captures.showFloating() }, { label: '打开待办清单', click: show }, { type: 'separator' }, { label: '退出 Piku', click: () => app.quit() }]));
     tray.on('click', show);
     Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: 'Piku', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'quit' }] }, { role: 'editMenu' }, { role: 'windowMenu' }]));
     setInterval(tick, 15000); powerMonitor.on('resume', tick); tick();
   }).catch(error => { console.error('Piku 启动失败：', error.message); app.quit(); });
   app.on('activate', show);
-  app.on('before-quit', () => { quitting = true; chatgpt?.stop(); });
+  app.on('before-quit', () => { quitting = true; judgments?.stop(); captures?.stop(); chatgpt?.stop(); });
 }

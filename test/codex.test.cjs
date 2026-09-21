@@ -70,6 +70,16 @@ test('generation requires ChatGPT auth and consumes only its own completed struc
   assert.ok(client.calls.some(c => c.method === 'thread/unsubscribe'));
   client.account = { type: 'apiKey' }; await assert.rejects(service.generate({}), /登录 ChatGPT/); service.stop();
 });
+test('image input is attached to the turn and cancellation interrupts only that turn', async () => {
+  const client = signedIn(); const service = new ChatGPTService({ client });
+  await service.generate({ schema: {}, input: 'read screenshot', imagePath: '/tmp/region.png' });
+  const input = client.calls.find(c => c.method === 'turn/start').params.input;
+  assert.deepEqual(input[1], { type: 'localImage', path: '/tmp/region.png' });
+  client.mode = 'timeout'; const controller = new AbortController();
+  const job = service.generate({ schema: {}, input: 'test', signal: controller.signal });
+  await new Promise(resolve => setImmediate(resolve)); controller.abort();
+  await assert.rejects(job, /取消/); assert.ok(client.calls.some(c => c.method === 'turn/interrupt')); service.stop();
+});
 test('generation handles timeout, disconnection and quota; rejects overlapping jobs', async () => {
   for (const mode of ['timeout', 'disconnect', 'quota']) {
     const client = signedIn(); client.mode = mode; const service = new ChatGPTService({ client, turnTimeout: 15 });

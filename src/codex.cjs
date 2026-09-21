@@ -114,7 +114,7 @@ class ChatGPTService {
           let cursor = null;
           do {
             const result = await this.client.request('model/list', { includeHidden: false, limit: 100, cursor });
-            this.status.models.push(...result.data.map(m => ({ id: m.model, name: m.displayName || m.model, isDefault: m.isDefault })));
+            this.status.models.push(...result.data.map(m => ({ id: m.model, name: m.displayName || m.model, isDefault: m.isDefault, supportsImages: m.inputModalities ? m.inputModalities.includes('image') : undefined })));
             cursor = result.nextCursor;
           } while (cursor && this.status.models.length < 300);
         }
@@ -153,15 +153,19 @@ class ChatGPTService {
     await this.cancelLogin(); await this.client.start(); await this.client.request('account/logout');
     this.status.connected = false; this.status.account = null; this.status.models = []; this.status.error = null; this.changed();
   }
-  async generate({ model, schema, input, instructions }) {
+  async generate({ model, schema, input, instructions, imagePath, signal }) {
     if (this.busy) throw new Error('正在处理上一项请求，请稍候');
-    this.busy = true; let threadId, listener, disconnected, timer;
+    this.busy = true; let threadId, listener, disconnected, timer, abort;
     try {
+      if (signal?.aborted) throw new Error('已取消识别');
       await this.refresh();
+      if (signal?.aborted) throw new Error('已取消识别');
       if (!this.status.connected) throw new Error('请先在设置中登录 ChatGPT 账号');
       if (model && !this.status.models.some(m => m.id === model)) throw new Error('所选模型不可用，请在设置中重新选择');
-      const thread = await this.client.request('thread/start', { ...(model ? { model } : {}), modelProvider: 'openai', cwd: path.join(this.client.directory, 'workspace'), ephemeral: true, approvalPolicy: 'never', sandbox: 'read-only', environments: [], selectedCapabilityRoots: [], baseInstructions: instructions, developerInstructions: '只根据提供的文本返回符合 JSON Schema 的最终结果。不得使用工具、读取文件、执行命令或访问外部服务；所有现实操作由 Piku 单独获得用户授权后执行。' });
+      if (imagePath && model && this.status.models.find(m => m.id === model)?.supportsImages === false) throw new Error('所选模型不支持截图，请在设置中选择支持图片的模型');
+      const thread = await this.client.request('thread/start', { ...(model ? { model } : {}), modelProvider: 'openai', cwd: path.join(this.client.directory, 'workspace'), ephemeral: true, approvalPolicy: 'never', sandbox: 'read-only', environments: [], selectedCapabilityRoots: [], baseInstructions: instructions, developerInstructions: '只根据提供的文本和附带图片返回符合 JSON Schema 的最终结果。不得使用工具、读取其他文件、执行命令或访问外部服务；所有现实操作由 Piku 单独获得用户授权后执行。' });
       threadId = thread.thread.id; let finalText = '', turnId;
+      if (signal?.aborted) throw new Error('已取消识别');
       const completion = new Promise((resolve, reject) => {
         listener = (method, params) => {
           if (params.threadId !== threadId) return;
@@ -174,6 +178,8 @@ class ChatGPTService {
           }
         };
         disconnected = () => reject(new Error('ChatGPT 连接已断开，请重试'));
+        abort = () => { if (turnId) this.client.request('turn/interrupt', { threadId, turnId }).catch(() => {}); reject(new Error('已取消识别')); };
+        signal?.addEventListener('abort', abort, { once: true });
         this.client.on('notification', listener); this.client.once('disconnected', disconnected);
         timer = setTimeout(() => {
           if (turnId) this.client.request('turn/interrupt', { threadId, turnId }).catch(() => {});
@@ -182,12 +188,14 @@ class ChatGPTService {
         }, this.turnTimeout);
       });
       completion.catch(() => {});
-      const turn = await this.client.request('turn/start', { threadId, input: [{ type: 'text', text: input }], outputSchema: schema, environments: [] });
+      const turn = await this.client.request('turn/start', { threadId, input: [{ type: 'text', text: input }, ...(imagePath ? [{ type: 'localImage', path: imagePath }] : [])], outputSchema: schema, environments: [] });
       turnId = turn.turn.id; this.active = { threadId, turnId };
+      if (signal?.aborted) abort();
       const output = await completion;
       try { return JSON.parse(output); } catch { throw new Error('模型返回的结果格式不正确，请重新分析'); }
     } finally {
       clearTimeout(timer);
+      if (abort) signal?.removeEventListener('abort', abort);
       if (listener) this.client.removeListener('notification', listener);
       if (disconnected) this.client.removeListener('disconnected', disconnected);
       if (threadId) this.client.request('thread/unsubscribe', { threadId }).catch(() => {});
