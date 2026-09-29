@@ -1,6 +1,6 @@
 {
   "name": "piku-assistant",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "Piku — 你的日常任务助手",
   "main": "src/main.cjs",
   "private": true,

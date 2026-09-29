@@ -50,7 +50,7 @@ function render() {
   $('#nav-count').textContent = todos.length; $('#action-count').textContent = pending.length;
   let html = '';
   if (page === 'tasks') {
-    html = heading('待办清单', `${todos.length} 件未完成`, '<button class="primary" data-command="add">＋ 记下一件事</button>');
+    html = heading('待办清单', `${todos.length} 件未完成`, '<div class="record-actions"><button class="outline" data-command="add">文字记录</button><button class="primary" data-command="screenshot"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M8 12h8m-4-4v8"/></svg>截图记事</button></div>');
     html += `<div class="section-heading"><div class="tabs">${[['todo', '未完成'], ['done', '已完成'], ['all', '全部']].map(([id, name]) => `<button class="tab ${filter === id ? 'active' : ''}" data-filter="${id}">${name}</button>`).join('')}</div><input class="search" id="search" aria-label="搜索待办" placeholder="搜索待办…" value="${escape(search)}"></div><div class="task-list">${sortedTasks().filter(t => (filter === 'all' || t.status === filter) && `${t.title} ${t.notes}`.toLowerCase().includes(search.toLowerCase())).map(taskRow).join('') || empty('这里暂时没有待办', '换个筛选条件，或记下一件新的事情。')}</div>`;
   }
   if (page === 'actions') html = heading('助手建议', '由你确认后执行。', `<button class="primary" data-command="review" ${state.reviewing ? 'disabled' : ''}>${state.reviewing ? '正在分析…' : '分析我的待办'}</button>`) + `<div class="actions-grid">${state.actions.map(actionCard).join('') || `<div class="card">${empty('还没有执行建议', '先记录待办，再点击“分析我的待办”。')}</div>`}</div>`;
